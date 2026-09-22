@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  workflow_call:
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binaries
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: build --clean
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      - uses: thomaslaurenson/gpipe@v1
+        with:
+          cosign_sign: true
+
+      - name: Get changelog
+        run: make get_changelog TAG="${GITHUB_REF_NAME}" > /tmp/release-notes.md
+
+      - name: Create release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/filenget-* \
+            install.sh install.ps1 \
+            checksums.txt checksums.txt.sigstore.json \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file /tmp/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
