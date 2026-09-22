@@ -1,0 +1,18 @@
+binary: filenget
+
+platforms:
+  linux_amd64:
+    path: ./dist/filenget-linux-x86_64
+    name: filenget-linux-x86_64
+  linux_arm64:
+    path: ./dist/filenget-linux-aarch64
+    name: filenget-linux-aarch64
+  darwin_amd64:
+    path: ./dist/filenget-darwin-x86_64
+    name: filenget-darwin-x86_64
+  darwin_arm64:
+    path: ./dist/filenget-darwin-aarch64
+    name: filenget-darwin-aarch64
+  windows_amd64:
+    path: ./dist/filenget-windows-x86_64.exe
+    name: filenget-windows-x86_64.exe

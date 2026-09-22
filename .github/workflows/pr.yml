@@ -1,0 +1,25 @@
+name: PR
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "**.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - ".goreleaser*.yml"
+      - .gpipe.yml
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+  test:
+    uses: ./.github/workflows/test.yml
