@@ -179,6 +179,11 @@ func (c *Client) writeChunks(ctx context.Context, f File, path string) (_ string
 		}
 		return "", fmt.Errorf("%q: decrypted %d bytes, expected %d", f.Name, written, f.Size)
 	}
+	// Flushed before the rename, so a crash cannot leave a short file under the
+	// final name, which a later run would take as complete.
+	if err := out.Sync(); err != nil {
+		return "", fmt.Errorf("sync %q: %w", part, err)
+	}
 	return part, nil
 }
 

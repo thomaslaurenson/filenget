@@ -17,6 +17,10 @@ import (
 // already written under.
 var errNameTaken = errors.New("another file in this run has the same name")
 
+// errNotTheSharedFile reports something already at the destination that is not
+// the file the share holds.
+var errNotTheSharedFile = errors.New("already exists and differs from the file in the share")
+
 // Fetch downloads every file behind each link into dir, leaving alone any file
 // already there, and writes one line per file to progress.
 //
@@ -86,6 +90,13 @@ func (c *Client) fetchOne(ctx context.Context, progress io.Writer, dir string, f
 	case err == nil:
 		if slices.ContainsFunc(written, func(w fs.FileInfo) bool { return os.SameFile(w, info) }) {
 			return nil, fmt.Errorf("%q: %w", target, errNameTaken)
+		}
+		// The size is all that can be compared without fetching the file
+		// again, and it catches a copy cut short or left from an older version
+		// of the share. A mismatch is reported rather than replaced, because
+		// the file may be one of the user's own.
+		if !info.Mode().IsRegular() || info.Size() != f.Size {
+			return nil, fmt.Errorf("%q: %w", target, errNotTheSharedFile)
 		}
 		fmt.Fprintf(progress, "[*] %s: already present\n", f.Name)
 		return nil, nil

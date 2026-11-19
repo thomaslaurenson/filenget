@@ -95,6 +95,50 @@ func TestFetchKeepsAFileNamedLikeAPartFile(t *testing.T) {
 	}
 }
 
+func TestFetchReportsSomethingElseAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setUp func(target string) error
+	}{
+		{
+			name:  "a file of another size",
+			setUp: func(target string) error { return os.WriteFile(target, []byte("old"), 0o644) },
+		},
+		{
+			name:  "a directory",
+			setUp: func(target string) error { return os.Mkdir(target, 0o755) },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := newShareServer(t, testFolderKey, []testFile{
+				{name: "first.bin", key: testFileKey, data: []byte("contents")},
+			})
+			client := newTestClient(server)
+			dir := t.TempDir()
+			target := filepath.Join(dir, "first.bin")
+			if err := tc.setUp(target); err != nil {
+				t.Fatalf("set up what is already present: %v", err)
+			}
+			before, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat what is already present: %v", err)
+			}
+
+			err = client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)})
+			if !errors.Is(err, errNotTheSharedFile) {
+				t.Fatalf("Fetch error = %v, want errNotTheSharedFile", err)
+			}
+			after, err := os.Stat(target)
+			if err != nil || after.Size() != before.Size() || after.IsDir() != before.IsDir() {
+				t.Errorf("what was already present changed (%v)", err)
+			}
+		})
+	}
+}
+
 func TestFetchRejectsBadLinkBeforeTouchingDisk(t *testing.T) {
 	t.Parallel()
 	server := newShareServer(t, testFolderKey, []testFile{

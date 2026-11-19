@@ -54,7 +54,7 @@ The new web app [swaps the letters][eras]. Its links are the only ones with the 
 [cli]: https://github.com/FilenCloudDienste/filen-rs/blob/eb93d283609a9730f54fa591dce4774d4883d00e/filen-cli/src/commands/public_links_cmds.rs#L1170-L1176
 [original]: https://github.com/FilenCloudDienste/filen-rs/blob/eb93d283609a9730f54fa591dce4774d4883d00e/filen-cli/src/commands/transfer_cmds.rs#L1218-L1222
 
-A file already at the destination is left alone, so running the same command again picks up whatever a previous run did not reach; a file interrupted part-way through is fetched again from the start. Each download is written to a `.part` file and renamed only once every chunk has arrived and the decrypted byte count matches the size the metadata promised, so a partial file is never mistaken for a complete one.
+A file already at the destination is left alone, so running the same command again picks up whatever a previous run did not reach; a file interrupted part-way through is fetched again from the start. One whose size differs from the shared file is reported as a failure rather than replaced. Each download is written to a `.part` file and renamed only once every chunk has arrived and the decrypted byte count matches the size the metadata promised, so a partial file is never mistaken for a complete one.
 
 A file that fails does not abandon the ones behind it: every link is attempted and the failures reported together. Chunks are fetched several at a time, and one lost to a dropped connection or a server-side error is retried.
 
