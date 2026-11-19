@@ -258,6 +258,23 @@ func TestFilesReadsASizeThatIsNotAnInteger(t *testing.T) {
 	}
 }
 
+func TestFilesReadsAChunkCountSentAsAString(t *testing.T) {
+	t.Parallel()
+	blob := `{"name":"file.bin","size":4,"key":"` + testFileKey + `"}`
+	server := newListingServer(t, map[string]any{
+		"uuid": "u", "region": testRegion, "bucket": testBucket, "chunks": "1", "version": dataVersion,
+		"metadata": encryptMetadata(t, blob, testFolderKey),
+	})
+
+	files, err := newTestClient(server).Files(t.Context(), Link{Kind: FolderLink, UUID: "share", Key: testFolderKey})
+	if err != nil {
+		t.Fatalf("Files returned error: %v", err)
+	}
+	if len(files) != 1 || files[0].Chunks != 1 {
+		t.Errorf("Files = %+v, want one file in 1 chunk", files)
+	}
+}
+
 func TestFilesRejectsUnsupportedMetadataVersion(t *testing.T) {
 	t.Parallel()
 	dirInfo := envelope(t, map[string]string{

@@ -73,11 +73,11 @@ func (n *looseInt) UnmarshalJSON(data []byte) error {
 
 // location says where a file's chunks live, in the shape every reply uses.
 type location struct {
-	UUID    string `json:"uuid"`
-	Region  string `json:"region"`
-	Bucket  string `json:"bucket"`
-	Chunks  int    `json:"chunks"`
-	Version int    `json:"version"`
+	UUID    string   `json:"uuid"`
+	Region  string   `json:"region"`
+	Bucket  string   `json:"bucket"`
+	Chunks  looseInt `json:"chunks"`
+	Version int      `json:"version"`
 }
 
 // file completes a location with the metadata that had to be decrypted first.
@@ -89,7 +89,7 @@ func (l location) file(name string, size int64, key string) File {
 		UUID:    l.UUID,
 		Region:  l.Region,
 		Bucket:  l.Bucket,
-		Chunks:  l.Chunks,
+		Chunks:  int(l.Chunks),
 		Version: l.Version,
 	}
 }
