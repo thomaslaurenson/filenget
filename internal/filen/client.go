@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -45,13 +47,37 @@ type File struct {
 	Version int
 }
 
+// looseInt is a size or count that not every Filen client writes as a JSON
+// integer. Some write a float or a numeric string, which Filen's own SDK reads
+// too, truncating a float; a negative value is still rejected.
+type looseInt int64
+
+// UnmarshalJSON reads an integer, a float or a numeric string.
+func (n *looseInt) UnmarshalJSON(data []byte) error {
+	text := string(data)
+	var quoted string
+	if json.Unmarshal(data, &quoted) == nil {
+		text = strings.TrimSpace(quoted)
+	}
+	if i, err := strconv.ParseInt(text, 10, 64); err == nil && i >= 0 {
+		*n = looseInt(i)
+		return nil
+	}
+	// NaN fails both comparisons, so it is rejected with the negatives
+	if f, err := strconv.ParseFloat(text, 64); err == nil && f >= 0 && f < math.MaxInt64 {
+		*n = looseInt(f)
+		return nil
+	}
+	return fmt.Errorf("%s is not a non-negative number", data)
+}
+
 // location says where a file's chunks live, in the shape every reply uses.
 type location struct {
-	UUID    string `json:"uuid"`
-	Region  string `json:"region"`
-	Bucket  string `json:"bucket"`
-	Chunks  int    `json:"chunks"`
-	Version int    `json:"version"`
+	UUID    string   `json:"uuid"`
+	Region  string   `json:"region"`
+	Bucket  string   `json:"bucket"`
+	Chunks  looseInt `json:"chunks"`
+	Version int      `json:"version"`
 }
 
 // file completes a location with the metadata that had to be decrypted first.
@@ -63,7 +89,7 @@ func (l location) file(name string, size int64, key string) File {
 		UUID:    l.UUID,
 		Region:  l.Region,
 		Bucket:  l.Bucket,
-		Chunks:  l.Chunks,
+		Chunks:  int(l.Chunks),
 		Version: l.Version,
 	}
 }
@@ -91,6 +117,10 @@ func New(httpClient *http.Client, gateway, egest string) *Client {
 // Files lists every file the link reaches, with its metadata decrypted. A
 // folder link lists the files directly inside the folder; subfolders are not
 // descended.
+//
+// A file whose metadata cannot be read is left out and reported in the
+// returned error, alongside the files that could be read. A failure that stops
+// the listing as a whole returns no files.
 func (c *Client) Files(ctx context.Context, link Link) ([]File, error) {
 	if link.Kind == FileLink {
 		return c.linkedFile(ctx, link)
@@ -149,6 +179,7 @@ func (c *Client) needsPassword(ctx context.Context, uuid string) bool {
 func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 	var root struct {
 		Parent      string `json:"parent"`
+		Metadata    string `json:"metadata"`
 		HasPassword bool   `json:"hasPassword"`
 	}
 	if err := c.post(ctx, dirLinkInfoPath, map[string]string{"uuid": link.UUID}, &root); err != nil {
@@ -156,6 +187,12 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 	}
 	if root.HasPassword {
 		return nil, fmt.Errorf("folder link %q: %w", link.UUID, ErrPasswordProtected)
+	}
+	// The folder's own metadata is sealed with the same key as its files'.
+	// Opening it first fails a wrong key once, here, rather than once for
+	// every file below, where each failure is reported and skipped.
+	if _, err := decryptMetadata(root.Metadata, link.Key); err != nil {
+		return nil, fmt.Errorf("folder link %q: %w", link.UUID, err)
 	}
 	var content struct {
 		Files []struct {
@@ -168,22 +205,25 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 		return nil, err
 	}
 	files := make([]File, 0, len(content.Files))
+	var failures []error
 	for _, record := range content.Files {
 		blob, err := decryptMetadata(record.Metadata, link.Key)
 		if err != nil {
-			return nil, fmt.Errorf("folder link %q: file %q: %w", link.UUID, record.UUID, err)
+			failures = append(failures, fmt.Errorf("folder link %q: file %q: %w", link.UUID, record.UUID, err))
+			continue
 		}
 		var metadata struct {
-			Name string `json:"name"`
-			Size int64  `json:"size"`
-			Key  string `json:"key"`
+			Name string   `json:"name"`
+			Size looseInt `json:"size"`
+			Key  string   `json:"key"`
 		}
 		if err := json.Unmarshal(blob, &metadata); err != nil {
-			return nil, fmt.Errorf("folder link %q: file %q: metadata: %w", link.UUID, record.UUID, err)
+			failures = append(failures, fmt.Errorf("folder link %q: file %q: metadata: %w", link.UUID, record.UUID, err))
+			continue
 		}
-		files = append(files, record.location.file(metadata.Name, metadata.Size, metadata.Key))
+		files = append(files, record.location.file(metadata.Name, int64(metadata.Size), metadata.Key))
 	}
-	return files, nil
+	return files, errors.Join(failures...)
 }
 
 // post calls one gateway endpoint and decodes the data field of its reply

@@ -2,6 +2,7 @@ package filen
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -125,11 +126,164 @@ func TestFilesReportsGatewayFailure(t *testing.T) {
 	}
 }
 
+// newServerWithAnUnreadableFile serves a folder share holding a file whose
+// metadata does not decrypt, listed before one that downloads as "good.bin".
+func newServerWithAnUnreadableFile(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	good, err := json.Marshal(map[string]any{"name": "good.bin", "size": 4, "key": testFileKey})
+	if err != nil {
+		t.Fatalf("encode metadata: %v", err)
+	}
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, testFolderKey),
+	})
+	dirContent := envelope(t, map[string]any{"files": []map[string]any{
+		{"uuid": "bad", "region": testRegion, "bucket": testBucket, "chunks": 1, "version": dataVersion,
+			"metadata": encryptMetadata(t, "{}", "another-key")},
+		{"uuid": "good", "region": testRegion, "bucket": testBucket, "chunks": 1, "version": dataVersion,
+			"metadata": encryptMetadata(t, string(good), testFolderKey)},
+	}})
+	chunk := encryptChunk(t, []byte("kept"), testFileKey)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+dirLinkInfoPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirInfo) })
+	mux.HandleFunc("POST "+dirLinkContentPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirContent) })
+	mux.HandleFunc("GET /{region}/{bucket}/good/0", func(w http.ResponseWriter, _ *http.Request) { w.Write(chunk) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestFilesListsPastAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	server := newServerWithAnUnreadableFile(t)
+
+	files, err := newTestClient(server).Files(t.Context(), Link{Kind: FolderLink, UUID: "share", Key: testFolderKey})
+	if err == nil {
+		t.Error("Files returned nil error for an unreadable file")
+	}
+	if len(files) != 1 || files[0].Name != "good.bin" {
+		t.Errorf("Files = %+v, want only good.bin", files)
+	}
+}
+
+// newListingServer serves a folder share whose listing holds records, for a
+// test that needs the reply in a shape newShareServer does not write.
+func newListingServer(t *testing.T, records ...map[string]any) *httptest.Server {
+	t.Helper()
+
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, testFolderKey),
+	})
+	dirContent := envelope(t, map[string]any{"files": records})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+dirLinkInfoPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirInfo) })
+	mux.HandleFunc("POST "+dirLinkContentPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirContent) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestLooseInt(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		json    string
+		want    looseInt
+		wantErr bool
+	}{
+		{name: "integer", json: `6`, want: 6},
+		{name: "zero", json: `0`, want: 0},
+		{name: "float with no fraction", json: `6.0`, want: 6},
+		{name: "float with a fraction is truncated", json: `6.9`, want: 6},
+		{name: "exponent", json: `1e3`, want: 1000},
+		{name: "numeric string", json: `"6"`, want: 6},
+		{name: "numeric string with spaces", json: `" 6 "`, want: 6},
+		{name: "float string", json: `"6.5"`, want: 6},
+		{name: "negative integer", json: `-1`, wantErr: true},
+		{name: "negative string", json: `"-1"`, wantErr: true},
+		{name: "not a number", json: `"six"`, wantErr: true},
+		{name: "NaN", json: `"NaN"`, wantErr: true},
+		{name: "too large", json: `1e300`, wantErr: true},
+		{name: "null", json: `null`, wantErr: true},
+		{name: "bool", json: `true`, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got looseInt
+			err := json.Unmarshal([]byte(tc.json), &got)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("unmarshal %s = %d, want an error", tc.json, got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("unmarshal %s = %d (%v), want %d", tc.json, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilesReadsASizeThatIsNotAnInteger(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		size string
+	}{
+		{name: "float", size: `4.0`},
+		{name: "string", size: `"4"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			blob := `{"name":"loose.bin","size":` + tc.size + `,"key":"` + testFileKey + `"}`
+			server := newListingServer(t, map[string]any{
+				"uuid": "u", "region": testRegion, "bucket": testBucket, "chunks": 1, "version": dataVersion,
+				"metadata": encryptMetadata(t, blob, testFolderKey),
+			})
+
+			files, err := newTestClient(server).Files(t.Context(), Link{Kind: FolderLink, UUID: "share", Key: testFolderKey})
+			if err != nil {
+				t.Fatalf("Files returned error: %v", err)
+			}
+			if len(files) != 1 || files[0].Size != 4 {
+				t.Errorf("Files = %+v, want one file of 4 bytes", files)
+			}
+		})
+	}
+}
+
+func TestFilesReadsAChunkCountSentAsAString(t *testing.T) {
+	t.Parallel()
+	blob := `{"name":"file.bin","size":4,"key":"` + testFileKey + `"}`
+	server := newListingServer(t, map[string]any{
+		"uuid": "u", "region": testRegion, "bucket": testBucket, "chunks": "1", "version": dataVersion,
+		"metadata": encryptMetadata(t, blob, testFolderKey),
+	})
+
+	files, err := newTestClient(server).Files(t.Context(), Link{Kind: FolderLink, UUID: "share", Key: testFolderKey})
+	if err != nil {
+		t.Fatalf("Files returned error: %v", err)
+	}
+	if len(files) != 1 || files[0].Chunks != 1 {
+		t.Errorf("Files = %+v, want one file in 1 chunk", files)
+	}
+}
+
 func TestFilesRejectsUnsupportedMetadataVersion(t *testing.T) {
 	t.Parallel()
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, testFolderKey),
+	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == dirLinkInfoPath {
-			w.Write([]byte(`{"status":true,"data":{"parent":"parent-uuid"}}`))
+			w.Write(dirInfo)
 			return
 		}
 		// Version 3 metadata, which the SDK defines with hex keys.

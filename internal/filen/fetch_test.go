@@ -69,6 +69,76 @@ func TestFetchSkipsFilesAlreadyPresent(t *testing.T) {
 	}
 }
 
+func TestFetchKeepsAFileNamedLikeAPartFile(t *testing.T) {
+	t.Parallel()
+	// The ".part" file comes first, so a download of the second file that
+	// wrote to "<name>.part" would empty it and then rename it away.
+	files := []testFile{
+		{name: "data.part", key: testFileKey, data: []byte("the share's own .part file")},
+		{name: "data", key: testFileKey, data: []byte("the data")},
+	}
+	server := newShareServer(t, testFolderKey, files)
+	client := newTestClient(server)
+	dir := filepath.Join(t.TempDir(), "dest")
+
+	if err := client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	for _, want := range files {
+		got, err := os.ReadFile(filepath.Join(dir, want.name))
+		if err != nil {
+			t.Fatalf("read %q: %v", want.name, err)
+		}
+		if !bytes.Equal(got, want.data) {
+			t.Errorf("%q = %q, want %q", want.name, got, want.data)
+		}
+	}
+}
+
+func TestFetchReportsSomethingElseAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setUp func(target string) error
+	}{
+		{
+			name:  "a file of another size",
+			setUp: func(target string) error { return os.WriteFile(target, []byte("old"), 0o644) },
+		},
+		{
+			name:  "a directory",
+			setUp: func(target string) error { return os.Mkdir(target, 0o755) },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := newShareServer(t, testFolderKey, []testFile{
+				{name: "first.bin", key: testFileKey, data: []byte("contents")},
+			})
+			client := newTestClient(server)
+			dir := t.TempDir()
+			target := filepath.Join(dir, "first.bin")
+			if err := tc.setUp(target); err != nil {
+				t.Fatalf("set up what is already present: %v", err)
+			}
+			before, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat what is already present: %v", err)
+			}
+
+			err = client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)})
+			if !errors.Is(err, errNotTheSharedFile) {
+				t.Fatalf("Fetch error = %v, want errNotTheSharedFile", err)
+			}
+			after, err := os.Stat(target)
+			if err != nil || after.Size() != before.Size() || after.IsDir() != before.IsDir() {
+				t.Errorf("what was already present changed (%v)", err)
+			}
+		})
+	}
+}
+
 func TestFetchRejectsBadLinkBeforeTouchingDisk(t *testing.T) {
 	t.Parallel()
 	server := newShareServer(t, testFolderKey, []testFile{
@@ -98,14 +168,62 @@ func TestFetchKeepsFilesInsideTheDestination(t *testing.T) {
 	client := newTestClient(server)
 	dir := filepath.Join(t.TempDir(), "dest")
 
-	if err := client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err != nil {
-		t.Fatalf("Fetch returned error: %v", err)
+	if err := client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err == nil {
+		t.Fatal("Fetch returned nil error")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "escaped.bin")); err != nil {
-		t.Errorf("file was not written under the destination: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "escaped.bin")); !os.IsNotExist(err) {
+		t.Error("Fetch wrote the file under another name")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escaped.bin")); !os.IsNotExist(err) {
 		t.Error("Fetch wrote outside the destination directory")
+	}
+}
+
+func TestUsableName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		file string
+		want bool
+	}{
+		{name: "plain name", file: "report.txt", want: true},
+		{name: "name with spaces", file: "annual report.txt", want: true},
+		{name: "name with a directory in it", file: "a/report.txt", want: false},
+		{name: "name climbing out", file: "../escaped.bin", want: false},
+		{name: "absolute path", file: "/etc/passwd", want: false},
+		{name: "trailing separator", file: "report/", want: false},
+		{name: "current directory", file: ".", want: false},
+		{name: "parent directory", file: "..", want: false},
+		{name: "empty", file: "", want: false},
+		{name: "colon, a stream on Windows", file: "notes 12:30.txt", want: runtime.GOOS != "windows"},
+		{name: "trailing dot, dropped on Windows", file: "report.", want: runtime.GOOS != "windows"},
+		{name: "device name on Windows", file: "CON", want: runtime.GOOS != "windows"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := usableName(tc.file); got != tc.want {
+				t.Errorf("usableName(%q) = %v, want %v", tc.file, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFetchRejectsANameUsedTwice(t *testing.T) {
+	t.Parallel()
+	server := newShareServer(t, testFolderKey, []testFile{
+		{name: "dup.txt", key: testFileKey, data: []byte("first")},
+		{name: "dup.txt", key: testFileKey, data: []byte("second")},
+	})
+	client := newTestClient(server)
+	dir := filepath.Join(t.TempDir(), "dest")
+
+	err := client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)})
+	if !errors.Is(err, errNameTaken) {
+		t.Fatalf("Fetch error = %v, want errNameTaken", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "dup.txt")); err != nil || string(got) != "first" {
+		t.Errorf("dup.txt = %q (%v), want the first file kept", got, err)
 	}
 }
 
@@ -153,6 +271,19 @@ func TestFetchCarriesOnPastAFailedFile(t *testing.T) {
 	}
 }
 
+func TestFetchCarriesOnPastAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	server := newServerWithAnUnreadableFile(t)
+	dir := filepath.Join(t.TempDir(), "dest")
+
+	if err := newTestClient(server).Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err == nil {
+		t.Error("Fetch returned nil error for an unreadable file")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "good.bin")); err != nil || string(got) != "kept" {
+		t.Errorf("good.bin = %q (%v), want it written", got, err)
+	}
+}
+
 func TestFetchReportsEveryFailure(t *testing.T) {
 	t.Parallel()
 	server := newShareServer(t, testFolderKey, []testFile{
@@ -186,7 +317,7 @@ func TestFetchReportsAnUnstatableDestination(t *testing.T) {
 	// differently and the test would not be proving anything.
 	client := New(http.DefaultClient, "http://invalid.invalid", "http://invalid.invalid")
 
-	err := client.fetchOne(t.Context(), io.Discard, dir, File{Name: "payload.bin", Version: dataVersion})
+	_, err := client.fetchOne(t.Context(), io.Discard, dir, File{Name: "payload.bin", Version: dataVersion}, nil)
 	if err == nil {
 		t.Fatal("fetchOne returned nil error")
 	}

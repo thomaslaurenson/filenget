@@ -110,7 +110,10 @@ func newShareServer(t *testing.T, folderKey string, files []testFile) *httptest.
 	}
 
 	dirContent := envelope(t, map[string]any{"files": records})
-	dirInfo := envelope(t, map[string]string{"parent": "parent-uuid"})
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, folderKey),
+	})
 
 	first := files[0]
 	fileInfo := envelope(t, map[string]any{

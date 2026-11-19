@@ -171,13 +171,48 @@ func TestDownloadReportsChunkFailure(t *testing.T) {
 	assertNoPartFile(t, target)
 }
 
-// assertNoPartFile fails when the in-progress file survived the download.
+// assertNoPartFile fails when an in-progress file for target survived the
+// download. It matches the "<name>.<8 hex digits>.part" createPart makes, so a
+// file merely called "<name>.part" is not mistaken for one.
 func assertNoPartFile(t *testing.T, target string) {
 	t.Helper()
 
-	if _, err := os.Stat(target + partSuffix); !os.IsNotExist(err) {
-		t.Errorf("%q was left behind", target+partSuffix)
+	entries, err := os.ReadDir(filepath.Dir(target))
+	if err != nil {
+		t.Fatalf("list %q: %v", filepath.Dir(target), err)
 	}
+	prefix := filepath.Base(target) + "."
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, partSuffix) &&
+			len(name) == len(prefix)+8+len(partSuffix) {
+			t.Errorf("%q was left behind", name)
+		}
+	}
+}
+
+func TestDownloadLeavesAnExistingPartFileAlone(t *testing.T) {
+	t.Parallel()
+	server := newShareServer(t, testFolderKey, []testFile{
+		{name: "payload.bin", key: testFileKey, data: []byte("contents")},
+	})
+	client := newTestClient(server)
+	file := fetchFirst(t, client, testFolderKey)
+
+	target := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(target+partSuffix, []byte("mine"), 0o644); err != nil {
+		t.Fatalf("set up the existing .part file: %v", err)
+	}
+	if err := client.Download(t.Context(), file, target); err != nil {
+		t.Fatalf("Download returned error: %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "contents" {
+		t.Errorf("downloaded %q (%v), want %q", got, err, "contents")
+	}
+	if got, err := os.ReadFile(target + partSuffix); err != nil || string(got) != "mine" {
+		t.Errorf("existing .part file holds %q (%v), want it untouched", got, err)
+	}
+	assertNoPartFile(t, target)
 }
 
 func TestDownloadReportsRenameFailure(t *testing.T) {
