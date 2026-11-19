@@ -2,8 +2,11 @@ package filen
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +15,11 @@ import (
 
 const (
 	partSuffix = ".part"
+
+	// partAttempts bounds the search for a .part name no file already holds.
+	// Each name carries 32 random bits, so running out means something other
+	// than chance is filling the directory.
+	partAttempts = 100
 
 	// protocolChunkSize is the plaintext size of every chunk but the last, as
 	// Filen's SDK defines it.
@@ -46,9 +54,8 @@ func (c *Client) Download(ctx context.Context, f File, path string) error {
 	if !chunksHoldSize(f.Chunks, f.Size, c.chunkSize) {
 		return fmt.Errorf("%q: %d chunk(s) cannot hold %d bytes", f.Name, f.Chunks, f.Size)
 	}
-	part := path + partSuffix
-	if err := c.writeChunks(ctx, f, part); err != nil {
-		os.Remove(part)
+	part, err := c.writeChunks(ctx, f, path)
+	if err != nil {
 		return err
 	}
 	if err := os.Rename(part, path); err != nil {
@@ -78,21 +85,48 @@ func chunksHoldSize(chunks int, size, chunkSize int64) bool {
 	return size-full*chunkSize <= chunkSize
 }
 
-// writeChunks fetches every chunk of f, appends them to path in order, and
-// fails if the decrypted total is not the size the metadata promised.
+// createPart creates the file a download of path is written to before it is
+// renamed into place: beside path, so the rename stays on one filesystem, and
+// under a name no file already holds, so neither a file of the user's nor one
+// in the share that happens to be called "<name>.part" is overwritten.
+// os.CreateTemp would find such a name too, but it creates the file 0600, a
+// mode the rename would carry over to the finished download.
+func createPart(path string) (*os.File, error) {
+	for range partAttempts {
+		name := fmt.Sprintf("%s.%08x%s", path, rand.Uint32(), partSuffix)
+		out, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("create %q: %w", name, err)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("create a part file for %q: every name tried is taken", path)
+}
+
+// writeChunks fetches every chunk of f, appends them in order to a new .part
+// file beside path, and returns that file's name. It fails if the decrypted
+// total is not the size the metadata promised, and removes the .part file when
+// it does.
 //
 // Chunks are fetched several at a time and written in the order the file needs
 // them, so a slow chunk delays only the writing rather than the fetches queued
 // behind it. Each fetch in flight owns a one-slot channel, which is what bounds
 // how much decrypted data is held at once.
-func (c *Client) writeChunks(ctx context.Context, f File, path string) (err error) {
-	out, err := os.Create(path)
+func (c *Client) writeChunks(ctx context.Context, f File, path string) (_ string, err error) {
+	out, err := createPart(path)
 	if err != nil {
-		return fmt.Errorf("create %q: %w", path, err)
+		return "", err
 	}
+	part := out.Name()
 	defer func() {
 		if cerr := out.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("close %q: %w", path, cerr)
+			err = fmt.Errorf("close %q: %w", part, cerr)
+		}
+		if err != nil {
+			os.Remove(part)
 		}
 	}()
 
@@ -128,11 +162,11 @@ func (c *Client) writeChunks(ctx context.Context, f File, path string) (err erro
 	for slot := range queue {
 		result := <-slot
 		if result.err != nil {
-			return result.err
+			return "", result.err
 		}
 		n, werr := out.Write(result.data)
 		if werr != nil {
-			return fmt.Errorf("write %q: %w", path, werr)
+			return "", fmt.Errorf("write %q: %w", part, werr)
 		}
 		written += int64(n)
 	}
@@ -141,11 +175,11 @@ func (c *Client) writeChunks(ctx context.Context, f File, path string) (err erro
 		// before blaming the file: a deadline reported as a size mismatch
 		// would name the wrong fault entirely.
 		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("%q: %w", f.Name, cerr)
+			return "", fmt.Errorf("%q: %w", f.Name, cerr)
 		}
-		return fmt.Errorf("%q: decrypted %d bytes, expected %d", f.Name, written, f.Size)
+		return "", fmt.Errorf("%q: decrypted %d bytes, expected %d", f.Name, written, f.Size)
 	}
-	return nil
+	return part, nil
 }
 
 // chunk fetches one encrypted chunk and decrypts it under the file's own key,

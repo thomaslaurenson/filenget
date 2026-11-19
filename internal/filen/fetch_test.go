@@ -69,6 +69,32 @@ func TestFetchSkipsFilesAlreadyPresent(t *testing.T) {
 	}
 }
 
+func TestFetchKeepsAFileNamedLikeAPartFile(t *testing.T) {
+	t.Parallel()
+	// The ".part" file comes first, so a download of the second file that
+	// wrote to "<name>.part" would empty it and then rename it away.
+	files := []testFile{
+		{name: "data.part", key: testFileKey, data: []byte("the share's own .part file")},
+		{name: "data", key: testFileKey, data: []byte("the data")},
+	}
+	server := newShareServer(t, testFolderKey, files)
+	client := newTestClient(server)
+	dir := filepath.Join(t.TempDir(), "dest")
+
+	if err := client.Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	for _, want := range files {
+		got, err := os.ReadFile(filepath.Join(dir, want.name))
+		if err != nil {
+			t.Fatalf("read %q: %v", want.name, err)
+		}
+		if !bytes.Equal(got, want.data) {
+			t.Errorf("%q = %q, want %q", want.name, got, want.data)
+		}
+	}
+}
+
 func TestFetchRejectsBadLinkBeforeTouchingDisk(t *testing.T) {
 	t.Parallel()
 	server := newShareServer(t, testFolderKey, []testFile{
