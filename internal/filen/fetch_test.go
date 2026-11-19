@@ -271,6 +271,19 @@ func TestFetchCarriesOnPastAFailedFile(t *testing.T) {
 	}
 }
 
+func TestFetchCarriesOnPastAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	server := newServerWithAnUnreadableFile(t)
+	dir := filepath.Join(t.TempDir(), "dest")
+
+	if err := newTestClient(server).Fetch(t.Context(), &bytes.Buffer{}, dir, []string{shareLink(testFolderKey)}); err == nil {
+		t.Error("Fetch returned nil error for an unreadable file")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "good.bin")); err != nil || string(got) != "kept" {
+		t.Errorf("good.bin = %q (%v), want it written", got, err)
+	}
+}
+
 func TestFetchReportsEveryFailure(t *testing.T) {
 	t.Parallel()
 	server := newShareServer(t, testFolderKey, []testFile{

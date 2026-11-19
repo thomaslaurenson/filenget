@@ -53,10 +53,11 @@ func (c *Client) Fetch(ctx context.Context, progress io.Writer, dir string, link
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
+		// Files can return both: the files it could read and the ones it
+		// could not
 		files, err := c.Files(ctx, link)
 		if err != nil {
 			failures = append(failures, err)
-			continue
 		}
 		for _, f := range files {
 			info, err := c.fetchOne(ctx, progress, dir, f, written)

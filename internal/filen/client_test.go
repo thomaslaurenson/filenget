@@ -2,6 +2,7 @@ package filen
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -125,11 +126,58 @@ func TestFilesReportsGatewayFailure(t *testing.T) {
 	}
 }
 
+// newServerWithAnUnreadableFile serves a folder share holding a file whose
+// metadata does not decrypt, listed before one that downloads as "good.bin".
+func newServerWithAnUnreadableFile(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	good, err := json.Marshal(map[string]any{"name": "good.bin", "size": 4, "key": testFileKey})
+	if err != nil {
+		t.Fatalf("encode metadata: %v", err)
+	}
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, testFolderKey),
+	})
+	dirContent := envelope(t, map[string]any{"files": []map[string]any{
+		{"uuid": "bad", "region": testRegion, "bucket": testBucket, "chunks": 1, "version": dataVersion,
+			"metadata": encryptMetadata(t, "{}", "another-key")},
+		{"uuid": "good", "region": testRegion, "bucket": testBucket, "chunks": 1, "version": dataVersion,
+			"metadata": encryptMetadata(t, string(good), testFolderKey)},
+	}})
+	chunk := encryptChunk(t, []byte("kept"), testFileKey)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+dirLinkInfoPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirInfo) })
+	mux.HandleFunc("POST "+dirLinkContentPath, func(w http.ResponseWriter, _ *http.Request) { w.Write(dirContent) })
+	mux.HandleFunc("GET /{region}/{bucket}/good/0", func(w http.ResponseWriter, _ *http.Request) { w.Write(chunk) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestFilesListsPastAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	server := newServerWithAnUnreadableFile(t)
+
+	files, err := newTestClient(server).Files(t.Context(), Link{Kind: FolderLink, UUID: "share", Key: testFolderKey})
+	if err == nil {
+		t.Error("Files returned nil error for an unreadable file")
+	}
+	if len(files) != 1 || files[0].Name != "good.bin" {
+		t.Errorf("Files = %+v, want only good.bin", files)
+	}
+}
+
 func TestFilesRejectsUnsupportedMetadataVersion(t *testing.T) {
 	t.Parallel()
+	dirInfo := envelope(t, map[string]string{
+		"parent":   "parent-uuid",
+		"metadata": encryptMetadata(t, `{"name":"share"}`, testFolderKey),
+	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == dirLinkInfoPath {
-			w.Write([]byte(`{"status":true,"data":{"parent":"parent-uuid"}}`))
+			w.Write(dirInfo)
 			return
 		}
 		// Version 3 metadata, which the SDK defines with hex keys.

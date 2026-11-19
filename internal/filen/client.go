@@ -91,6 +91,10 @@ func New(httpClient *http.Client, gateway, egest string) *Client {
 // Files lists every file the link reaches, with its metadata decrypted. A
 // folder link lists the files directly inside the folder; subfolders are not
 // descended.
+//
+// A file whose metadata cannot be read is left out and reported in the
+// returned error, alongside the files that could be read. A failure that stops
+// the listing as a whole returns no files.
 func (c *Client) Files(ctx context.Context, link Link) ([]File, error) {
 	if link.Kind == FileLink {
 		return c.linkedFile(ctx, link)
@@ -149,6 +153,7 @@ func (c *Client) needsPassword(ctx context.Context, uuid string) bool {
 func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 	var root struct {
 		Parent      string `json:"parent"`
+		Metadata    string `json:"metadata"`
 		HasPassword bool   `json:"hasPassword"`
 	}
 	if err := c.post(ctx, dirLinkInfoPath, map[string]string{"uuid": link.UUID}, &root); err != nil {
@@ -156,6 +161,12 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 	}
 	if root.HasPassword {
 		return nil, fmt.Errorf("folder link %q: %w", link.UUID, ErrPasswordProtected)
+	}
+	// The folder's own metadata is sealed with the same key as its files'.
+	// Opening it first fails a wrong key once, here, rather than once for
+	// every file below, where each failure is reported and skipped.
+	if _, err := decryptMetadata(root.Metadata, link.Key); err != nil {
+		return nil, fmt.Errorf("folder link %q: %w", link.UUID, err)
 	}
 	var content struct {
 		Files []struct {
@@ -168,10 +179,12 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 		return nil, err
 	}
 	files := make([]File, 0, len(content.Files))
+	var failures []error
 	for _, record := range content.Files {
 		blob, err := decryptMetadata(record.Metadata, link.Key)
 		if err != nil {
-			return nil, fmt.Errorf("folder link %q: file %q: %w", link.UUID, record.UUID, err)
+			failures = append(failures, fmt.Errorf("folder link %q: file %q: %w", link.UUID, record.UUID, err))
+			continue
 		}
 		var metadata struct {
 			Name string `json:"name"`
@@ -179,11 +192,12 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 			Key  string `json:"key"`
 		}
 		if err := json.Unmarshal(blob, &metadata); err != nil {
-			return nil, fmt.Errorf("folder link %q: file %q: metadata: %w", link.UUID, record.UUID, err)
+			failures = append(failures, fmt.Errorf("folder link %q: file %q: metadata: %w", link.UUID, record.UUID, err))
+			continue
 		}
 		files = append(files, record.location.file(metadata.Name, metadata.Size, metadata.Key))
 	}
-	return files, nil
+	return files, errors.Join(failures...)
 }
 
 // post calls one gateway endpoint and decodes the data field of its reply
