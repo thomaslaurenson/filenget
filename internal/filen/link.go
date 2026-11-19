@@ -50,10 +50,16 @@ type Link struct {
 func ParseLink(raw string) (Link, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return Link{}, fmt.Errorf("parse %q: %w", raw, err)
+		// A url.Error repeats the whole URL, key included, so only its cause
+		// is kept.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return Link{}, fmt.Errorf("parse %q: %w", redact(raw), err)
 	}
 	if !isFilenHost(parsed.Hostname()) {
-		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
+		return Link{}, fmt.Errorf("%q: %w", redact(raw), ErrNotALink)
 	}
 	// The hash-router shape carries its whole route in the fragment, where
 	// url.Parse has already unescaped the %23 that separates the key.
@@ -64,14 +70,33 @@ func ParseLink(raw string) (Link, error) {
 	}
 	letter, uuid, found := strings.Cut(strings.Trim(route, "/"), "/")
 	if !found || uuid == "" || key == "" {
-		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
+		return Link{}, fmt.Errorf("%q: %w", redact(raw), ErrNotALink)
 	}
 	key, encoded := decodeKey(key)
 	kind, ok := linkKind(letter, encoded && !hashRouted)
 	if !ok {
-		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
+		return Link{}, fmt.Errorf("%q: %w", redact(raw), ErrNotALink)
 	}
 	return Link{Kind: kind, UUID: uuid, Key: key}, nil
+}
+
+// redact cuts the key from a link so an error can name the link without
+// putting its key into a terminal or a CI log. The key follows the first '#'
+// or '%', except in a hash-routed link, whose route is kept up to the separator
+// before its key because it names the share. Cutting at the last separator
+// instead would leak a key that a mangled link follows with another one.
+func redact(raw string) string {
+	cut := strings.IndexAny(raw, "#%")
+	if cut < 0 {
+		return raw
+	}
+	if strings.HasPrefix(raw[cut:], "#/") {
+		if end := strings.IndexAny(raw[cut+1:], "#%"); end >= 0 {
+			return raw[:cut+1+end]
+		}
+		return raw
+	}
+	return raw[:cut]
 }
 
 // linkKind reads the letter a route names its kind with, which the newest shape

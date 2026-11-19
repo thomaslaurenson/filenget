@@ -138,3 +138,54 @@ func TestParseLinkReportsAnUnparseableURL(t *testing.T) {
 		t.Error("ParseLink returned nil error")
 	}
 }
+
+func TestParseLinkKeepsTheKeyOutOfErrors(t *testing.T) {
+	t.Parallel()
+	const key = "secretkey"
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "another host entirely", raw: "https://example.com/d/abc-123#" + key},
+		{name: "unknown link kind", raw: "https://drive.filen.io/x/abc-123#" + key},
+		{name: "hash route of an unknown kind", raw: "https://app.filen.io/#/x/abc-123%23" + key},
+		{name: "a URL net/url rejects", raw: "https://drive.filen.io/f/abc\x7f#" + key},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseLink(tc.raw)
+			if err == nil {
+				t.Fatalf("ParseLink(%q) returned nil error", tc.raw)
+			}
+			if strings.Contains(err.Error(), key) {
+				t.Errorf("ParseLink(%q) error %q carries the key", tc.raw, err)
+			}
+		})
+	}
+}
+
+func TestRedact(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "path-routed link", raw: "https://drive.filen.io/d/abc-123#thekey", want: "https://drive.filen.io/d/abc-123"},
+		{name: "hash-routed link keeps its route", raw: "https://app.filen.io/#/d/abc-123%23thekey", want: "https://app.filen.io/#/d/abc-123"},
+		{name: "hash-routed link with a literal second hash", raw: "https://app.filen.io/#/d/abc-123#thekey", want: "https://app.filen.io/#/d/abc-123"},
+		{name: "key escaped into the path", raw: "https://app.filen.io/f/abc-123%23thekey", want: "https://app.filen.io/f/abc-123"},
+		{name: "another separator after the key", raw: "https://app.filen.io/f/abc-123#thekey%23more", want: "https://app.filen.io/f/abc-123"},
+		{name: "hash route with no key", raw: "https://app.filen.io/#/drive", want: "https://app.filen.io/#/drive"},
+		{name: "no fragment", raw: "https://drive.filen.io/f/abc-123", want: "https://drive.filen.io/f/abc-123"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := redact(tc.raw); got != tc.want {
+				t.Errorf("redact(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
