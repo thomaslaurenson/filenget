@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -25,6 +26,11 @@ const filenHost = "filen.io"
 
 // ErrNotALink reports a URL that is not a Filen file or folder share link.
 var ErrNotALink = errors.New("not a Filen file or folder link")
+
+// uuidPattern is the shape of the id a link names its share by. Checking it
+// here, as Filen's apps do, fails a mangled link by name rather than leaving
+// it to the API, which answers only that the link was not found.
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Link is a parsed Filen public share link.
 type Link struct {
@@ -69,7 +75,9 @@ func ParseLink(raw string) (Link, error) {
 		route, key, _ = strings.Cut(parsed.Fragment, "#")
 	}
 	letter, uuid, found := strings.Cut(strings.Trim(route, "/"), "/")
-	if !found || uuid == "" || key == "" {
+	// Filen's web app lowercases the id before it asks the API about it
+	uuid = strings.ToLower(uuid)
+	if !found || !uuidPattern.MatchString(uuid) || key == "" {
 		return Link{}, fmt.Errorf("%q: %w", redact(raw), ErrNotALink)
 	}
 	key, encoded := decodeKey(key)

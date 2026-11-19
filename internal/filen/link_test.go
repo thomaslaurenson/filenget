@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// linkUUID is an id in the shape a share link must name its share by.
+const linkUUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
 // hexKey is "thekey" hex-encoded, as Filen's current apps write a key.
 const hexKey = "7468656b6579"
 
@@ -22,68 +25,73 @@ func TestParseLink(t *testing.T) {
 	}{
 		{
 			name: "file link",
-			raw:  "https://drive.filen.io/d/abc-123#thekey",
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://drive.filen.io/d/" + linkUUID + "#thekey",
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "folder link",
-			raw:  "https://drive.filen.io/f/abc-123#thekey",
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://drive.filen.io/f/" + linkUUID + "#thekey",
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "trailing slash on the path",
-			raw:  "https://drive.filen.io/f/abc-123/#thekey",
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://drive.filen.io/f/" + linkUUID + "/#thekey",
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "host case is ignored",
-			raw:  "https://DRIVE.FILEN.IO/f/abc-123#thekey",
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://DRIVE.FILEN.IO/f/" + linkUUID + "#thekey",
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "bare filen.io host",
-			raw:  "https://filen.io/d/abc-123#thekey",
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://filen.io/d/" + linkUUID + "#thekey",
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "hash-routed file link",
-			raw:  "https://app.filen.io/#/d/abc-123%23" + hexKey,
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/#/d/" + linkUUID + "%23" + hexKey,
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "hash-routed folder link",
-			raw:  "https://app.filen.io/#/f/abc-123%23" + hexKey,
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/#/f/" + linkUUID + "%23" + hexKey,
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "hash-routed link with a literal second hash",
-			raw:  "https://app.filen.io/#/d/abc-123#" + hexKey,
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/#/d/" + linkUUID + "#" + hexKey,
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "hash-routed link with its key as it is",
-			raw:  "https://app.filen.io/#/f/abc-123%23thekey",
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/#/f/" + linkUUID + "%23thekey",
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "hash-routed link with a raw key that looks like hex",
-			raw:  "https://app.filen.io/#/d/abc-123%23" + rawHexKey,
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: rawHexKey},
+			raw:  "https://app.filen.io/#/d/" + linkUUID + "%23" + rawHexKey,
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: rawHexKey},
 		},
 		{
 			name: "path-routed file link with a hex key swaps the letters",
-			raw:  "https://app.filen.io/f/abc-123#" + hexKey,
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/f/" + linkUUID + "#" + hexKey,
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "path-routed folder link with a hex key swaps the letters",
-			raw:  "https://app.filen.io/d/abc-123#" + hexKey,
-			want: Link{Kind: FolderLink, UUID: "abc-123", Key: "thekey"},
+			raw:  "https://app.filen.io/d/" + linkUUID + "#" + hexKey,
+			want: Link{Kind: FolderLink, UUID: linkUUID, Key: "thekey"},
 		},
 		{
 			name: "path-routed link with a raw key that looks like hex keeps the letters",
-			raw:  "https://drive.filen.io/d/abc-123#" + rawHexKey,
-			want: Link{Kind: FileLink, UUID: "abc-123", Key: rawHexKey},
+			raw:  "https://drive.filen.io/d/" + linkUUID + "#" + rawHexKey,
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: rawHexKey},
+		},
+		{
+			name: "upper-case id is lowered",
+			raw:  "https://drive.filen.io/d/" + strings.ToUpper(linkUUID) + "#thekey",
+			want: Link{Kind: FileLink, UUID: linkUUID, Key: "thekey"},
 		},
 	}
 	for _, tc := range tests {
@@ -106,17 +114,20 @@ func TestParseLinkRejects(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "no fragment, which is where the key lives", raw: "https://drive.filen.io/f/abc-123"},
-		{name: "empty fragment", raw: "https://drive.filen.io/f/abc-123#"},
-		{name: "unknown link kind", raw: "https://drive.filen.io/x/abc-123#thekey"},
+		{name: "no fragment, which is where the key lives", raw: "https://drive.filen.io/f/" + linkUUID},
+		{name: "empty fragment", raw: "https://drive.filen.io/f/" + linkUUID + "#"},
+		{name: "unknown link kind", raw: "https://drive.filen.io/x/" + linkUUID + "#thekey"},
 		{name: "no uuid", raw: "https://drive.filen.io/f/#thekey"},
 		{name: "no kind or uuid", raw: "https://drive.filen.io/#thekey"},
-		{name: "hash route with no key", raw: "https://app.filen.io/#/d/abc-123"},
-		{name: "hash route with an empty key", raw: "https://app.filen.io/#/d/abc-123%23"},
+		{name: "id that is not a uuid", raw: "https://drive.filen.io/d/abc-123#thekey"},
+		{name: "id followed by another segment", raw: "https://drive.filen.io/d/" + linkUUID + "/extra#thekey"},
+		{name: "hash-routed id that is not a uuid", raw: "https://app.filen.io/#/d/abc-123%23" + hexKey},
+		{name: "hash route with no key", raw: "https://app.filen.io/#/d/" + linkUUID},
+		{name: "hash route with an empty key", raw: "https://app.filen.io/#/d/" + linkUUID + "%23"},
 		{name: "hash route that is not a link", raw: "https://app.filen.io/#/drive"},
-		{name: "hash route of an unknown kind", raw: "https://app.filen.io/#/x/abc-123%23" + hexKey},
-		{name: "another host entirely", raw: "https://example.com/f/abc-123#thekey"},
-		{name: "a host merely ending in the domain", raw: "https://notfilen.io/f/abc-123#thekey"},
+		{name: "hash route of an unknown kind", raw: "https://app.filen.io/#/x/" + linkUUID + "%23" + hexKey},
+		{name: "another host entirely", raw: "https://example.com/f/" + linkUUID + "#thekey"},
+		{name: "a host merely ending in the domain", raw: "https://notfilen.io/f/" + linkUUID + "#thekey"},
 		{name: "not a URL at all", raw: "nonsense"},
 		{name: "empty", raw: ""},
 	}
@@ -146,9 +157,10 @@ func TestParseLinkKeepsTheKeyOutOfErrors(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "another host entirely", raw: "https://example.com/d/abc-123#" + key},
-		{name: "unknown link kind", raw: "https://drive.filen.io/x/abc-123#" + key},
-		{name: "hash route of an unknown kind", raw: "https://app.filen.io/#/x/abc-123%23" + key},
+		{name: "another host entirely", raw: "https://example.com/d/" + linkUUID + "#" + key},
+		{name: "unknown link kind", raw: "https://drive.filen.io/x/" + linkUUID + "#" + key},
+		{name: "id that is not a uuid", raw: "https://drive.filen.io/d/abc-123#" + key},
+		{name: "hash route of an unknown kind", raw: "https://app.filen.io/#/x/" + linkUUID + "%23" + key},
 		{name: "a URL net/url rejects", raw: "https://drive.filen.io/f/abc\x7f#" + key},
 	}
 	for _, tc := range tests {

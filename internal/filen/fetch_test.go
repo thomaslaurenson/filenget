@@ -14,7 +14,7 @@ import (
 
 // shareLink builds the folder link a fake share is reached by.
 func shareLink(key string) string {
-	return "https://drive.filen.io/f/share#" + key
+	return "https://drive.filen.io/f/0f8fad5b-d9cb-469f-a165-70867728950e#" + key
 }
 
 func TestFetch(t *testing.T) {
