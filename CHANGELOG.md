@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 - 2026-11-20
+
+### Added
+
+- Accept share links in every shape Filen's apps write
+
+### Fixed
+
+- Report a malformed share link without its key, before contacting Filen
+
 ## 0.1.2 - 2026-11-20
 
 ### Updated
