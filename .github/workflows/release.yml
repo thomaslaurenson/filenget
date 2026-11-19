@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          check-latest: true
           cache: true
 
       - name: Build binaries
@@ -27,7 +28,7 @@ jobs:
         env:
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
-      - uses: thomaslaurenson/gpipe@v1
+      - uses: thomaslaurenson/gpipe@d6c7e5571b28bc16212b1629a939758884a24c8f # v1.5.2
         with:
           cosign_sign: true
 
