@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -43,6 +45,30 @@ type File struct {
 	Bucket  string
 	Chunks  int
 	Version int
+}
+
+// looseInt is a size or count that not every Filen client writes as a JSON
+// integer. Some write a float or a numeric string, which Filen's own SDK reads
+// too, truncating a float; a negative value is still rejected.
+type looseInt int64
+
+// UnmarshalJSON reads an integer, a float or a numeric string.
+func (n *looseInt) UnmarshalJSON(data []byte) error {
+	text := string(data)
+	var quoted string
+	if json.Unmarshal(data, &quoted) == nil {
+		text = strings.TrimSpace(quoted)
+	}
+	if i, err := strconv.ParseInt(text, 10, 64); err == nil && i >= 0 {
+		*n = looseInt(i)
+		return nil
+	}
+	// NaN fails both comparisons, so it is rejected with the negatives
+	if f, err := strconv.ParseFloat(text, 64); err == nil && f >= 0 && f < math.MaxInt64 {
+		*n = looseInt(f)
+		return nil
+	}
+	return fmt.Errorf("%s is not a non-negative number", data)
 }
 
 // location says where a file's chunks live, in the shape every reply uses.
@@ -187,15 +213,15 @@ func (c *Client) folderFiles(ctx context.Context, link Link) ([]File, error) {
 			continue
 		}
 		var metadata struct {
-			Name string `json:"name"`
-			Size int64  `json:"size"`
-			Key  string `json:"key"`
+			Name string   `json:"name"`
+			Size looseInt `json:"size"`
+			Key  string   `json:"key"`
 		}
 		if err := json.Unmarshal(blob, &metadata); err != nil {
 			failures = append(failures, fmt.Errorf("folder link %q: file %q: metadata: %w", link.UUID, record.UUID, err))
 			continue
 		}
-		files = append(files, record.location.file(metadata.Name, metadata.Size, metadata.Key))
+		files = append(files, record.location.file(metadata.Name, int64(metadata.Size), metadata.Key))
 	}
 	return files, errors.Join(failures...)
 }
