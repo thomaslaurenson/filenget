@@ -1,6 +1,7 @@
 package filen
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,10 +12,10 @@ import (
 type Kind string
 
 const (
-	// FileLink is a link to one file, https://drive.filen.io/d/<uuid>#<key>.
-	FileLink Kind = "d"
-	// FolderLink is a link to a folder, https://drive.filen.io/f/<uuid>#<key>.
-	FolderLink Kind = "f"
+	// FileLink is a link to one file.
+	FileLink Kind = "file"
+	// FolderLink is a link to a folder.
+	FolderLink Kind = "folder"
 )
 
 // filenHost is the domain a share link sits under. The API this package talks
@@ -36,6 +37,16 @@ type Link struct {
 // and the key held in the URL fragment. The fragment is the whole reason this
 // package exists: a browser never sends it, so Filen cannot decrypt the share
 // server-side and nor can anything that only fetches the URL.
+//
+// Filen's apps have written three shapes of link, and the letter naming the
+// kind does not mean the same thing in all of them:
+//
+//	https://drive.filen.io/d/<uuid>#<key>     d is a file, f a folder
+//	https://app.filen.io/#/d/<uuid>%23<hex>   d is a file, f a folder
+//	https://app.filen.io/f/<uuid>#<hex>       f is a file, d a folder
+//
+// Only the last swaps the letters, and it is the only one that both keeps its
+// route in the path and hex-encodes its key, which is how it is told apart.
 func ParseLink(raw string) (Link, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -44,16 +55,53 @@ func ParseLink(raw string) (Link, error) {
 	if !isFilenHost(parsed.Hostname()) {
 		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
 	}
-	kind, uuid, found := strings.Cut(strings.Trim(parsed.Path, "/"), "/")
-	if !found || uuid == "" || parsed.Fragment == "" {
+	// The hash-router shape carries its whole route in the fragment, where
+	// url.Parse has already unescaped the %23 that separates the key.
+	route, key := parsed.Path, parsed.Fragment
+	hashRouted := strings.HasPrefix(parsed.Fragment, "/")
+	if hashRouted {
+		route, key, _ = strings.Cut(parsed.Fragment, "#")
+	}
+	letter, uuid, found := strings.Cut(strings.Trim(route, "/"), "/")
+	if !found || uuid == "" || key == "" {
 		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
 	}
-	switch Kind(kind) {
-	case FileLink, FolderLink:
-		return Link{Kind: Kind(kind), UUID: uuid, Key: parsed.Fragment}, nil
+	key, encoded := decodeKey(key)
+	kind, ok := linkKind(letter, encoded && !hashRouted)
+	if !ok {
+		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
+	}
+	return Link{Kind: kind, UUID: uuid, Key: key}, nil
+}
+
+// linkKind reads the letter a route names its kind with, which the newest shape
+// of link swaps.
+func linkKind(letter string, swapped bool) (Kind, bool) {
+	switch {
+	case letter == "d" && !swapped, letter == "f" && swapped:
+		return FileLink, true
+	case letter == "f" && !swapped, letter == "d" && swapped:
+		return FolderLink, true
 	default:
-		return Link{}, fmt.Errorf("%q: %w", raw, ErrNotALink)
+		return "", false
 	}
+}
+
+// decodeKey undoes the hex encoding Filen's current apps wrap a key in,
+// reporting whether there was any. Every key is printable ASCII, so hex that
+// decodes to anything else is a raw key that only looks like hex, as a version
+// 3 key does, and is kept as it is.
+func decodeKey(key string) (string, bool) {
+	decoded, err := hex.DecodeString(key)
+	if err != nil {
+		return key, false
+	}
+	for _, b := range decoded {
+		if b < '!' || b > '~' {
+			return key, false
+		}
+	}
+	return string(decoded), true
 }
 
 func isFilenHost(host string) bool {

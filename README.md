@@ -39,7 +39,20 @@ filenget <directory> <link>...
 filenget --version
 ```
 
-A link is either a file link, `https://drive.filen.io/d/<uuid>#<key>`, or a folder link, `https://drive.filen.io/f/<uuid>#<key>`. A folder link fetches every file directly inside the folder under its own name; subfolders are not descended.
+A link is a Filen public share link to a file or a folder, in any shape Filen's apps write one. A folder link fetches every file directly inside the folder under its own name; subfolders are not descended.
+
+| Link | File | Folder | Written by |
+|---|---|---|---|
+| `https://app.filen.io/#/d/<uuid>%23<key>` | `d` | `f` | the [web app][eras], [mobile app][mobile] and [Filen CLI][cli] |
+| `https://app.filen.io/f/<uuid>#<key>` | `f` | `d` | the [new web app][eras] |
+| `https://drive.filen.io/d/<uuid>#<key>` | `d` | `f` | the [original web app][original] |
+
+The new web app [swaps the letters][eras]. Its links are the only ones with the route in the path and a hex-encoded key, which is how filenget tells them apart.
+
+[eras]: https://github.com/FilenCloudDienste/filen-ts/blob/09b67ce19a2582ceaec1f1dc4681cf3e6daa304c/packages/filen-web/src/features/publicLinks/lib/format.logic.ts#L13-L24
+[mobile]: https://github.com/FilenCloudDienste/filen-ts/blob/09b67ce19a2582ceaec1f1dc4681cf3e6daa304c/packages/filen-mobile/src/lib/sdkUnwrap.ts#L441-L449
+[cli]: https://github.com/FilenCloudDienste/filen-rs/blob/eb93d283609a9730f54fa591dce4774d4883d00e/filen-cli/src/commands/public_links_cmds.rs#L1170-L1176
+[original]: https://github.com/FilenCloudDienste/filen-rs/blob/eb93d283609a9730f54fa591dce4774d4883d00e/filen-cli/src/commands/transfer_cmds.rs#L1218-L1222
 
 A file already at the destination is left alone, so running the same command again picks up whatever a previous run did not reach; a file interrupted part-way through is fetched again from the start. Each download is written to a `.part` file and renamed only once every chunk has arrived and the decrypted byte count matches the size the metadata promised, so a partial file is never mistaken for a complete one.
 
@@ -57,13 +70,13 @@ One line per file goes to stderr and stdout stays empty, so `filenget testdata <
 
 ```bash
 # Fetch everything behind a folder link into ./testdata
-filenget testdata https://drive.filen.io/f/<uuid>#<key>
+filenget testdata https://app.filen.io/#/f/<uuid>%23<key>
 
 # Fetch a single file
-filenget testdata https://drive.filen.io/d/<uuid>#<key>
+filenget testdata https://app.filen.io/#/d/<uuid>%23<key>
 
 # Fetch several links into the same directory
-filenget testdata https://drive.filen.io/f/<uuid>#<key> https://drive.filen.io/d/<uuid>#<key>
+filenget testdata https://app.filen.io/#/f/<uuid>%23<key> https://app.filen.io/#/d/<uuid>%23<key>
 ```
 
 ### Shell completion
