@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 - 2026-11-20
+
+### Changed
+
+- Reject file names that are not a single plain name, rather than shortening them
+- Report a file already at the destination whose size differs from the shared one
+
+### Fixed
+
+- Stop a download overwriting an existing .part file
+- Report two files with the same name instead of skipping the second
+- Download the rest of a folder when one file's details cannot be read
+- Accept file sizes and chunk counts written as decimals or text
+
 ## 0.2.0 - 2026-11-20
 
 ### Added
